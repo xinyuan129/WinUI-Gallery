@@ -9,6 +9,8 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Dispatching;
 using WinUIGallery.TabViewPages;
 using System.Collections.ObjectModel;
+using Microsoft.UI.Xaml.Media;
+using System.Collections;
 
 namespace WinUIGallery.ControlPages
 {
@@ -58,7 +60,8 @@ namespace WinUIGallery.ControlPages
             TabViewItem newItem = new TabViewItem
             {
                 Header = $"Document {index}",
-                IconSource = new Microsoft.UI.Xaml.Controls.SymbolIconSource() { Symbol = Symbol.Document }
+                IconSource = new Microsoft.UI.Xaml.Controls.SymbolIconSource() { Symbol = Symbol.Document },
+                ContextFlyout = TabViewContextMenu
             };
 
             // The content of the tab is often a frame that contains a page, though it could be any UIElement.
@@ -255,6 +258,88 @@ namespace WinUIGallery.ControlPages
             tabViewSample.SetupWindowMinSize(newWindow);
 
             newWindow.Activate();
+        }
+
+        private void TabViewContextMenu_Opening(object sender, object e)
+        {
+            MenuFlyout contextMenu = (MenuFlyout)sender;
+            contextMenu.Items.Clear();
+
+            var item = (TabViewItem)contextMenu.Target;
+            ListView tabViewListView = null;
+            TabView tabView = null;
+
+            DependencyObject current = item;
+
+            while (current != null)
+            {
+                DependencyObject parent = VisualTreeHelper.GetParent(current);
+
+                if (parent is ListView parentTabViewListView)
+                {
+                    tabViewListView = parentTabViewListView;
+                }
+                else if (parent is TabView parentTabView)
+                {
+                    tabView = parentTabView;
+                }
+
+                if (tabViewListView != null && tabView != null)
+                {
+                    break;
+                }
+
+                current = parent;
+            }
+
+            if (tabViewListView == null || tabView == null)
+            {
+                return;
+            }
+
+            int index = tabViewListView.IndexFromContainer(item);
+
+            if (index > 0)
+            {
+                MenuFlyoutItem moveLeftItem = new() { Text = "Move tab left" };
+                moveLeftItem.Click += (s, args) =>
+                {
+                    if (tabView.TabItemsSource is IList itemsSourceList)
+                    {
+                        var item = itemsSourceList[index];
+                        itemsSourceList.RemoveAt(index);
+                        itemsSourceList.Insert(index - 1, item);
+                    }
+                    else
+                    {
+                        var item = tabView.TabItems[index];
+                        tabView.TabItems.RemoveAt(index);
+                        tabView.TabItems.Insert(index - 1, item);
+                    }
+                };
+                contextMenu.Items.Add(moveLeftItem);
+            }
+
+            if (index < tabViewListView.Items.Count - 1)
+            {
+                MenuFlyoutItem moveRightItem = new() { Text = "Move tab right" };
+                moveRightItem.Click += (s, args) =>
+                {
+                    if (tabView.TabItemsSource is IList itemsSourceList)
+                    {
+                        var item = itemsSourceList[index];
+                        itemsSourceList.RemoveAt(index);
+                        itemsSourceList.Insert(index + 1, item);
+                    }
+                    else
+                    {
+                        var item = tabView.TabItems[index];
+                        tabView.TabItems.RemoveAt(index);
+                        tabView.TabItems.Insert(index + 1, item);
+                    }
+                };
+                contextMenu.Items.Add(moveRightItem);
+            }
         }
     }
 }

@@ -17,14 +17,39 @@ using DispatcherQueueHandler = Microsoft.UI.Dispatching.DispatcherQueueHandler;
 using System.Linq;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
+using System.Collections.Generic;
+using System.Collections;
+using System.Collections.ObjectModel;
 
 namespace WinUIGallery.TabViewPages
 {
+    public class TabItemData : DependencyObject
+    {
+        public string Header
+        {
+            get { return (string)GetValue(HeaderProperty); }
+            set { SetValue(HeaderProperty, value); }
+        }
+
+        public string Content
+        {
+            get { return (string)GetValue(ContentProperty); }
+            set { SetValue(ContentProperty, value); }
+        }
+
+        public static DependencyProperty HeaderProperty { get; } = DependencyProperty.Register("Header", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
+        public static DependencyProperty ContentProperty { get; } = DependencyProperty.Register("Content", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
+    }
+
     public sealed partial class TabViewWindowingSamplePage : Page
     {
-        private const string DataIdentifier = "MyTabItem";
+        private static readonly List<Window> windowList = new();
+
         private Win32WindowHelper win32WindowHelper;
         private Window tabTearOutWindow = null;
+
+        private readonly ObservableCollection<TabItemData> tabItemDataList = [];
+        public ObservableCollection<TabItemData> TabItemDataList => tabItemDataList;
 
         public TabViewWindowingSamplePage()
         {
@@ -45,6 +70,15 @@ namespace WinUIGallery.TabViewPages
             currentWindow.ExtendsContentIntoTitleBar = true;
             currentWindow.SetTitleBar(CustomDragRegion);
             CustomDragRegion.MinWidth = 188;
+
+            if (!windowList.Contains(currentWindow))
+            {
+                windowList.Add(currentWindow);
+                currentWindow.Closed += (s, args) =>
+                {
+                    windowList.Remove(currentWindow);
+                };
+            }
         }
 
         public void LoadDemoData()
@@ -52,27 +86,15 @@ namespace WinUIGallery.TabViewPages
             // Main Window -- add some default items
             for (int i = 0; i < 3; i++)
             {
-                Tabs.TabItems.Add(new TabViewItem() { IconSource = new Microsoft.UI.Xaml.Controls.SymbolIconSource() { Symbol = Symbol.Placeholder }, Header = $"Item {i}", Content = new MyTabContentControl() { DataContext = $"Page {i}" } });
+                TabItemDataList.Add(new TabItemData() { Header = $"Item {i}", Content = $"Page {i}" });
             }
 
             Tabs.SelectedIndex = 0;
         }
 
-        public void AddTabToTabs(TabViewItem tab)
-        {
-            Tabs.TabItems.Add(tab);
-        }
-
         private void Tabs_TabTearOutWindowRequested(TabView sender, TabViewTabTearOutWindowRequestedEventArgs args)
         {
-            var newPage = new TabViewWindowingSamplePage();
-
-            tabTearOutWindow = WindowHelper.CreateWindow();
-            tabTearOutWindow.ExtendsContentIntoTitleBar = true;
-            tabTearOutWindow.Content = newPage;
-            tabTearOutWindow.AppWindow.SetIcon("Assets/Tiles/GalleryIcon.ico");
-            newPage.SetupWindowMinSize(tabTearOutWindow);
-
+            tabTearOutWindow = CreateNewWindow();
             args.NewWindowId = tabTearOutWindow.AppWindow.Id;
         }
 
@@ -83,13 +105,7 @@ namespace WinUIGallery.TabViewPages
                 return;
             }
 
-            var newPage = (TabViewWindowingSamplePage)tabTearOutWindow.Content;
-
-            foreach (TabViewItem tab in args.Tabs.Cast<TabViewItem>())
-            {
-                GetParentTabView(tab)?.TabItems.Remove(tab);
-                newPage.AddTabToTabs(tab);
-            }
+            MoveDataItems(TabItemDataList, GetTabItemDataList(tabTearOutWindow), args.Items, 0);
         }
 
         private void Tabs_ExternalTornOutTabsDropping(TabView sender, TabViewExternalTornOutTabsDroppingEventArgs args)
@@ -99,25 +115,42 @@ namespace WinUIGallery.TabViewPages
 
         private void Tabs_ExternalTornOutTabsDropped(TabView sender, TabViewExternalTornOutTabsDroppedEventArgs args)
         {
-            int position = 0;
+            MoveDataItems(TabItemDataList, GetTabItemDataList(WindowHelper.GetWindowForElement(sender)), args.Items, args.DropIndex);
+        }
 
-            foreach (TabViewItem tab in args.Tabs.Cast<TabViewItem>())
+        private static Window CreateNewWindow()
+        {
+            var newPage = new TabViewWindowingSamplePage();
+
+            var window = WindowHelper.CreateWindow();
+            window.ExtendsContentIntoTitleBar = true;
+            window.Content = newPage;
+            window.AppWindow.SetIcon("Assets/Tiles/GalleryIcon.ico");
+            newPage.SetupWindowMinSize(window);
+
+            return window;
+        }
+
+        private static void MoveDataItems(ObservableCollection<TabItemData> source, ObservableCollection<TabItemData> destination, object[] dataItems, int index)
+        {
+            foreach (TabItemData tabItemData in dataItems.Cast<TabItemData>())
             {
-                GetParentTabView(tab)?.TabItems.Remove(tab);
-                sender.TabItems.Insert(args.DropIndex + position, tab);
-                position++;
+                source.Remove(tabItemData);
+                destination.Insert(index, tabItemData);
+
+                index++;
             }
         }
 
-        private TabView GetParentTabView(TabViewItem tab)
+        private static T GetParent<T>(DependencyObject child) where T : DependencyObject
         {
-            DependencyObject current = tab;
+            DependencyObject current = child;
 
             while (current != null)
             {
-                if (current is TabView tabView)
+                if (current is T parent)
                 {
-                    return tabView;
+                    return parent;
                 }
 
                 current = VisualTreeHelper.GetParent(current);
@@ -126,37 +159,133 @@ namespace WinUIGallery.TabViewPages
             return null;
         }
 
-        private TabViewItem CreateNewTVI(string header, string dataContext)
+        private static ObservableCollection<TabItemData> GetTabItemDataList(Window window)
         {
-            var newTab = new TabViewItem()
-            {
-                IconSource = new Microsoft.UI.Xaml.Controls.SymbolIconSource()
-                {
-                    Symbol = Symbol.Placeholder
-                },
-                Header = header,
-                Content = new MyTabContentControl()
-                {
-                    DataContext = dataContext
-                }
-            };
-
-            return newTab;
+            var tabViewPage = (TabViewWindowingSamplePage)window.Content;
+            return tabViewPage.TabItemDataList;
         }
 
         private void Tabs_AddTabButtonClick(TabView sender, object args)
         {
-            var tab = CreateNewTVI("New Item", "New Item");
-            sender.TabItems.Add(tab);
+            TabItemDataList.Add(new TabItemData() { Header = "New Item", Content = "New Item" });
         }
 
         private void Tabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
         {
-            sender.TabItems.Remove(args.Tab);
+            TabItemDataList.Remove((TabItemData)args.Item);
 
-            if (sender.TabItems.Count == 0)
+            if (TabItemDataList.Count == 0)
             {
                 WindowHelper.GetWindowForElement(this).Close();
+            }
+        }
+
+        private void TabViewContextMenu_Opening(object sender, object e)
+        {
+            MenuFlyout contextMenu = (MenuFlyout)sender;
+            contextMenu.Items.Clear();
+
+            var tabViewItem = (TabViewItem)contextMenu.Target;
+            ListView tabViewListView = GetParent<ListView>(tabViewItem);
+            TabView tabView = GetParent<TabView>(tabViewListView);
+            var window = WindowHelper.GetWindowForElement(tabView);
+
+            if (tabViewListView == null || tabView == null)
+            {
+                return;
+            }
+
+            var tabItemDataList = (ObservableCollection<TabItemData>)tabView.TabItemsSource;
+            int index = tabViewListView.IndexFromContainer(tabViewItem);
+            var tabDataItem = tabViewListView.ItemFromContainer(tabViewItem);
+
+            if (index > 0)
+            {
+                MenuFlyoutItem moveLeftItem = new() { Text = "Move tab left" };
+                moveLeftItem.Click += (s, args) =>
+                {
+                    var item = tabItemDataList[index];
+                    tabItemDataList.RemoveAt(index);
+                    tabItemDataList.Insert(index - 1, item);
+                };
+                contextMenu.Items.Add(moveLeftItem);
+            }
+
+            if (index < tabItemDataList.Count - 1)
+            {
+                MenuFlyoutItem moveRightItem = new() { Text = "Move tab right" };
+                moveRightItem.Click += (s, args) =>
+                {
+                    var item = tabItemDataList[index];
+                    tabItemDataList.RemoveAt(index);
+                    tabItemDataList.Insert(index + 1, item);
+                };
+                contextMenu.Items.Add(moveRightItem);
+            }
+
+            MenuFlyoutSubItem moveSubItem = new() { Text = "Move tab to" };
+
+            if (tabItemDataList.Count > 1)
+            {
+                MenuFlyoutItem newWindowItem = new() { Text = "New window", Icon = new SymbolIcon(Symbol.NewWindow) };
+
+                newWindowItem.Click += (s, args) =>
+                {
+                    var newWindow = CreateNewWindow();
+                    MoveDataItems(tabItemDataList, GetTabItemDataList(newWindow), [tabDataItem], 0);
+                    newWindow.Activate();
+                };
+
+                moveSubItem.Items.Add(newWindowItem);
+            }
+
+            List<MenuFlyoutItem> moveToWindowItems = [];
+
+            foreach (Window otherWindow in windowList)
+            {
+                if (window == otherWindow)
+                {
+                    continue;
+                }
+
+                var windowTabItemDataList = GetTabItemDataList(otherWindow);
+
+                if (windowTabItemDataList.Count > 0)
+                {
+                    MenuFlyoutItem moveToWindowItem = new() { Text = $"\"{windowTabItemDataList[0].Header}\" and {windowTabItemDataList.Count - 1} other tabs", Icon = new SymbolIcon(Symbol.BackToWindow) };
+                    moveToWindowItem.Click += (s, args) =>
+                    {
+                        MoveDataItems(tabItemDataList, windowTabItemDataList, [tabDataItem], windowTabItemDataList.Count);
+
+                        if (tabItemDataList.Count == 0)
+                        {
+                            window.Close();
+                        }
+
+                        otherWindow.Activate();
+                    };
+                    moveToWindowItems.Add(moveToWindowItem);
+                }
+            }
+
+            if (moveToWindowItems.Count > 0)
+            {
+                contextMenu.Items.Add(new MenuFlyoutSeparator());
+            }
+
+            foreach (MenuFlyoutItem moveToWindowItem in moveToWindowItems)
+            {
+                moveSubItem.Items.Add(moveToWindowItem);
+            }
+
+            if (moveSubItem.Items.Count > 0)
+            {
+                contextMenu.Items.Add(moveSubItem);
+            }
+
+            if (contextMenu.Items.Count == 0)
+            {
+                contextMenu.Hide();
             }
         }
     }
