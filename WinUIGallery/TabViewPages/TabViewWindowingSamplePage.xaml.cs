@@ -1,25 +1,12 @@
-using System;
-using Windows.ApplicationModel.Core;
-using Windows.ApplicationModel.DataTransfer;
-using Windows.Foundation.Metadata;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Hosting;
-using Microsoft.UI.Xaml.Navigation;
-using Microsoft.UI.Windowing;
-using WinUIGallery.Helper;
-using System.Threading;
-using Microsoft.UI.Dispatching;
-using System.Threading.Tasks;
-using Windows.System;
-using DispatcherQueueHandler = Microsoft.UI.Dispatching.DispatcherQueueHandler;
-using System.Linq;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Input;
-using System.Collections.Generic;
-using System.Collections;
-using System.Collections.ObjectModel;
+using Windows.System;
+using WinUIGallery.Helper;
 
 namespace WinUIGallery.TabViewPages
 {
@@ -37,16 +24,23 @@ namespace WinUIGallery.TabViewPages
             set { SetValue(ContentProperty, value); }
         }
 
-        public static DependencyProperty HeaderProperty { get; } = DependencyProperty.Register("Header", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
-        public static DependencyProperty ContentProperty { get; } = DependencyProperty.Register("Content", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
+        public bool IsInProgress
+        {
+            get { return (bool)GetValue(IsInProgressProperty); }
+            set { SetValue(IsInProgressProperty, value); }
+        }
+
+        public static readonly DependencyProperty HeaderProperty = DependencyProperty.Register("Header", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
+        public static readonly DependencyProperty ContentProperty = DependencyProperty.Register("Content", typeof(string), typeof(TabItemData), new PropertyMetadata(""));
+        public static readonly DependencyProperty IsInProgressProperty = DependencyProperty.Register("Content", typeof(bool), typeof(TabItemData), new PropertyMetadata(false));
     }
 
     public sealed partial class TabViewWindowingSamplePage : Page
     {
-        private static readonly List<Window> windowList = new();
+        private static readonly List<Window> windowList = [];
+        private static Window tabTearOutWindow = null;
 
         private Win32WindowHelper win32WindowHelper;
-        private Window tabTearOutWindow = null;
 
         private readonly ObservableCollection<TabItemData> tabItemDataList = [];
         public ObservableCollection<TabItemData> TabItemDataList => tabItemDataList;
@@ -74,6 +68,26 @@ namespace WinUIGallery.TabViewPages
             if (!windowList.Contains(currentWindow))
             {
                 windowList.Add(currentWindow);
+
+                // We can have a window we're dragging in two different ways: either we created a new window
+                // for tearing out purposes, or we're dragging an existing window.
+                // If we created a new window, tabTearOutWindow will be set to that window.
+                // Otherwise, it won't be set to anything, so we should set it to the window we're currently dragging.
+                var inputNonClientPointerSource = InputNonClientPointerSource.GetForWindowId(currentWindow.AppWindow.Id);
+
+                inputNonClientPointerSource.EnteredMoveSize += (s, args) =>
+                {
+                    if (tabTearOutWindow == null)
+                    {
+                        tabTearOutWindow = currentWindow;
+                    }
+                };
+
+                inputNonClientPointerSource.ExitedMoveSize += (s, args) =>
+                {
+                    tabTearOutWindow = null;
+                };
+
                 currentWindow.Closed += (s, args) =>
                 {
                     windowList.Remove(currentWindow);
@@ -115,7 +129,7 @@ namespace WinUIGallery.TabViewPages
 
         private void Tabs_ExternalTornOutTabsDropped(TabView sender, TabViewExternalTornOutTabsDroppedEventArgs args)
         {
-            MoveDataItems(TabItemDataList, GetTabItemDataList(WindowHelper.GetWindowForElement(sender)), args.Items, args.DropIndex);
+            MoveDataItems(GetTabItemDataList(tabTearOutWindow), TabItemDataList, args.Items, args.DropIndex);
         }
 
         private static Window CreateNewWindow()
@@ -133,30 +147,19 @@ namespace WinUIGallery.TabViewPages
 
         private static void MoveDataItems(ObservableCollection<TabItemData> source, ObservableCollection<TabItemData> destination, object[] dataItems, int index)
         {
-            foreach (TabItemData tabItemData in dataItems.Cast<TabItemData>())
+            foreach (object tabItemData in dataItems)
             {
-                source.Remove(tabItemData);
-                destination.Insert(index, tabItemData);
+                source.Remove((TabItemData)tabItemData);
+                destination.Insert(index, (TabItemData)tabItemData);
 
                 index++;
             }
         }
 
-        private static T GetParent<T>(DependencyObject child) where T : DependencyObject
+        private static TabView GetTabView(Window window)
         {
-            DependencyObject current = child;
-
-            while (current != null)
-            {
-                if (current is T parent)
-                {
-                    return parent;
-                }
-
-                current = VisualTreeHelper.GetParent(current);
-            }
-
-            return null;
+            var tabViewPage = (TabViewWindowingSamplePage)window.Content;
+            return tabViewPage.Tabs;
         }
 
         private static ObservableCollection<TabItemData> GetTabItemDataList(Window window)
@@ -182,49 +185,31 @@ namespace WinUIGallery.TabViewPages
 
         private void TabViewContextMenu_Opening(object sender, object e)
         {
+            // The contents of the context menu depends on the state of the application, so we'll build it dynamically.
             MenuFlyout contextMenu = (MenuFlyout)sender;
-            contextMenu.Items.Clear();
+
+            // We'll first put the generic tab view context menu items in place.
+            TabViewHelper.PopulateTabViewContextMenu(contextMenu);
 
             var tabViewItem = (TabViewItem)contextMenu.Target;
-            ListView tabViewListView = GetParent<ListView>(tabViewItem);
-            TabView tabView = GetParent<TabView>(tabViewListView);
-            var window = WindowHelper.GetWindowForElement(tabView);
+            ListView tabViewListView = UIHelper.GetParent<ListView>(tabViewItem);
+            var window = WindowHelper.GetWindowForElement(tabViewItem);
 
-            if (tabViewListView == null || tabView == null)
+            if (tabViewListView == null)
             {
                 return;
             }
 
-            var tabItemDataList = (ObservableCollection<TabItemData>)tabView.TabItemsSource;
-            int index = tabViewListView.IndexFromContainer(tabViewItem);
+            var tabItemDataList = GetTabItemDataList(window);
             var tabDataItem = tabViewListView.ItemFromContainer(tabViewItem);
 
-            if (index > 0)
-            {
-                MenuFlyoutItem moveLeftItem = new() { Text = "Move tab left" };
-                moveLeftItem.Click += (s, args) =>
-                {
-                    var item = tabItemDataList[index];
-                    tabItemDataList.RemoveAt(index);
-                    tabItemDataList.Insert(index - 1, item);
-                };
-                contextMenu.Items.Add(moveLeftItem);
-            }
-
-            if (index < tabItemDataList.Count - 1)
-            {
-                MenuFlyoutItem moveRightItem = new() { Text = "Move tab right" };
-                moveRightItem.Click += (s, args) =>
-                {
-                    var item = tabItemDataList[index];
-                    tabItemDataList.RemoveAt(index);
-                    tabItemDataList.Insert(index + 1, item);
-                };
-                contextMenu.Items.Add(moveRightItem);
-            }
-
+            // Second, we'll include menu items to move this tab to those windows.
             MenuFlyoutSubItem moveSubItem = new() { Text = "Move tab to" };
 
+            // If there are at least two tabs in this window, we'll include the option to move the tab to a new window.
+            // This option doesn't make sense if there is only one tab, because in that case the source window would have no tabs left,
+            // and we would effectively be just moving the tab from one window with only one tab to another window with only one tab,
+            // leaving us in the same state as we started in.
             if (tabItemDataList.Count > 1)
             {
                 MenuFlyoutItem newWindowItem = new() { Text = "New window", Icon = new SymbolIcon(Symbol.NewWindow) };
@@ -233,12 +218,20 @@ namespace WinUIGallery.TabViewPages
                 {
                     var newWindow = CreateNewWindow();
                     MoveDataItems(tabItemDataList, GetTabItemDataList(newWindow), [tabDataItem], 0);
-                    newWindow.Activate();
+
+                    // Activating the window and setting its selected item hit a failed assert if the content hasn't been loaded yet,
+                    // so we'll defer these for a tick to allow that to happen first.
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        newWindow.Activate();
+                        GetTabView(newWindow).SelectedItem = tabDataItem;
+                    });
                 };
 
                 moveSubItem.Items.Add(newWindowItem);
             }
 
+            // If there are other windows that exist, we'll include the option to move the tab to those windows.
             List<MenuFlyoutItem> moveToWindowItems = [];
 
             foreach (Window otherWindow in windowList)
@@ -252,22 +245,38 @@ namespace WinUIGallery.TabViewPages
 
                 if (windowTabItemDataList.Count > 0)
                 {
-                    MenuFlyoutItem moveToWindowItem = new() { Text = $"\"{windowTabItemDataList[0].Header}\" and {windowTabItemDataList.Count - 1} other tabs", Icon = new SymbolIcon(Symbol.BackToWindow) };
+                    string moveToWindowItemText = $"Window with \"{windowTabItemDataList[0].Header}\"";
+
+                    if (windowTabItemDataList.Count > 1)
+                    {
+                        int remainingTabCount = windowTabItemDataList.Count - 1;
+                        moveToWindowItemText += $" and {remainingTabCount} other tab{(remainingTabCount == 1 ? "" : "s")}";
+                    }
+
+                    MenuFlyoutItem moveToWindowItem = new() { Text = moveToWindowItemText, Icon = new SymbolIcon(Symbol.BackToWindow) };
                     moveToWindowItem.Click += (s, args) =>
                     {
                         MoveDataItems(tabItemDataList, windowTabItemDataList, [tabDataItem], windowTabItemDataList.Count);
 
+                        // If removing the tab from its current tab view will leave no tabs remaining, then we'll close the tab view's window.
                         if (tabItemDataList.Count == 0)
                         {
                             window.Close();
                         }
 
-                        otherWindow.Activate();
+                        // Activating the window and setting its selected item hit a failed assert if the content hasn't been loaded yet,
+                        // so we'll defer these for a tick to allow that to happen first.
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            otherWindow.Activate();
+                            GetTabView(otherWindow).SelectedItem = tabDataItem;
+                        });
                     };
                     moveToWindowItems.Add(moveToWindowItem);
                 }
             }
 
+            // Only include a separator if we're going to be including at least one move-to-window item.
             if (moveToWindowItems.Count > 0)
             {
                 contextMenu.Items.Add(new MenuFlyoutSeparator());
@@ -278,11 +287,13 @@ namespace WinUIGallery.TabViewPages
                 moveSubItem.Items.Add(moveToWindowItem);
             }
 
+            // Only include the move-to sub-item if it has any items.
             if (moveSubItem.Items.Count > 0)
             {
                 contextMenu.Items.Add(moveSubItem);
             }
 
+            // If the context menu ended up with no items at all, then we'll prevent it from being shown.
             if (contextMenu.Items.Count == 0)
             {
                 contextMenu.Hide();

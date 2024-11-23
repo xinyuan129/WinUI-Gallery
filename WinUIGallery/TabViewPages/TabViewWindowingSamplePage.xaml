@@ -34,7 +34,7 @@
                         <TabViewItem.IconSource>
                             <SymbolIconSource Symbol="Placeholder" />
                         </TabViewItem.IconSource>
-                        <local:MyTabContentControl DataContext="{x:Bind Content}" />
+                        <local:MyTabContentControl DataContext="{x:Bind Content}" IsInProgress="{x:Bind IsInProgress, Mode=TwoWay}" />
                     </TabViewItem>
                 </DataTemplate>
             </TabView.TabItemTemplate>
