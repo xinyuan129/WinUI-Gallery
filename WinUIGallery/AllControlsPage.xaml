@@ -78,3 +78,9 @@
             SelectionMode="None" />
     </Grid>
 </local:ItemsPageBase>
+<!-- Network optimization settings -->
+<local:NetworkOptimizer
+    {EnableCaching="True"
+    CacheDuration="00:30:00"
+    MaxConnectionsPerServer="10"
+    UseHttp2="True" />
